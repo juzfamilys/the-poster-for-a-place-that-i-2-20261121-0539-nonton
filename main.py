@@ -11,6 +11,7 @@ zlib + struct. No fonts, no image libraries, no network.
 Output: /output/entry.png (768 x 1024, RGB PNG).
 """
 
+import hashlib
 import math
 import os
 import struct
@@ -501,6 +502,36 @@ def write_png(cv, path):
     return len(data)
 
 
+def verify_png(path):
+    """Output self-check: re-read the PNG, validate its signature,
+    IHDR dimensions and chunk CRCs, and confirm the size limit."""
+    with open(path, "rb") as f:
+        data = f.read()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "bad PNG signature"
+    pos = 8
+    dims = None
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind = data[pos + 4:pos + 8]
+        chunk_data = data[pos + 8:pos + 8 + length]
+        crc_stored = struct.unpack(">I", data[pos + 8 + length:pos + 12 + length])[0]
+        crc_actual = zlib.crc32(kind + chunk_data) & 0xFFFFFFFF
+        assert crc_stored == crc_actual, "CRC mismatch in %s chunk" % kind
+        if kind == b"IHDR":
+            w, h = struct.unpack(">II", chunk_data[:8])
+            dims = (w, h)
+            assert dims == (W, H), "IHDR %dx%d != %dx%d" % (w, h, W, H)
+        if kind == b"IEND":
+            break
+        pos += 12 + length
+    assert dims == (W, H), "no IHDR chunk found"
+    size = len(data)
+    assert size <= 1024 * 1024, "PNG %d bytes exceeds 1 MiB limit" % size
+    print("self-check OK: %dx%d, %d bytes, sha256 %s"
+          % (dims[0], dims[1], size, hashlib.sha256(data).hexdigest()))
+    return size
+
+
 # -------------------------------------------------------------------- main
 def build():
     cv = Canvas(W, H)
@@ -533,6 +564,7 @@ def main():
         os.makedirs("output", exist_ok=True)
         path = os.path.join("output", "entry.png")
     size = write_png(cv, path)
+    verify_png(path)
     print("wrote %s (%dx%d, %d bytes)" % (path, W, H, size))
 
 
